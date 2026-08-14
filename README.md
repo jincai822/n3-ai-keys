@@ -1,6 +1,6 @@
 # N3 AI 快捷键包（n3-ai-keys）
 
-把 **Mirabox N3** 控制台变成你的 **Linux 桌面 AI 控制台**：9 个按键 + 3 个旋钮，AI 总结、提示词优化、语音输入、框选截图全部一键完成。基于 [OpenDeck](https://github.com/nekename/OpenDeck) 软件驱动，适用于 Ubuntu（X11/GNOME）桌面。
+把 **Mirabox N3** 控制台变成你的 **Linux 桌面 AI 控制台**：9 个按键 + 3 个旋钮，AI 多模式交互、提示词优化、语音输入、框选截图全部一键完成。基于 [OpenDeck](https://github.com/nekename/OpenDeck) 软件驱动，适用于 Ubuntu（X11/GNOME）桌面。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -13,7 +13,7 @@
 | 按键 | 图标 | 功能 | 用法 | 依赖 |
 | :---: | :---: | --- | --- | --- |
 | 1 | <img src="icons/1.png" width="48" alt="Pi"> | 打开 Pi 官网 | 按一下，浏览器打开 https://www.pi.dev/ | google-chrome（可选） |
-| 2 | <img src="icons/2.png" width="48" alt="AI 总结"> | **AI 总结** | 选中文字按一下，AI 总结成一句话，自动粘贴回来 | DeepSeek API key |
+| 2 | <img src="icons/2.png" width="48" alt="AI 智能键"> | **AI 智能键**（4 模式循环） | 选中文字后连按，每次不同操作：① 智能分析 → ② 翻译 → ③ 大白话简化 → ④ 提取待办 → 循环… 3 秒无操作自动重置 | DeepSeek API key |
 | 3 | <img src="icons/3.png" width="48" alt="提示词优化"> | **提示词优化** | 选中粗糙文字按一下，AI 改写为高质量提示词并粘贴 | DeepSeek API key |
 | 4 | <img src="icons/4.png" width="48" alt="语音输入"> | **语音输入** | 按一下开始录音，再按一下停止，语音自动转文字粘贴 | vocotype + Qwen3-ASR（可选） |
 | 5 | <img src="icons/5.png" width="48" alt="框选截图"> | 框选截图 | 按一下，拖动鼠标框住要截的区域，自动保存并复制 | maim |
@@ -76,7 +76,7 @@ n3-ai-keys/
 ├── README.md           本说明文件
 ├── LICENSE             MIT 许可证
 ├── assets/             键位预览图（README 头图）
-├── scripts/            7 个快捷键脚本（AI 总结、提示词优化、语音、截图等）
+├── scripts/            8 个脚本（n3-common.sh 公共库 + 7 个快捷键脚本）
 ├── config/             3 个提示词风格预设（AI 改写文字时的要求）
 ├── icons/              9 个按键图标（1.png ~ 9.png）
 └── profile/            OpenDeck 键位配置模板（自动替换用户名）
@@ -88,7 +88,7 @@ n3-ai-keys/
 
 ```bash
 # 1. 删除快捷键脚本
-rm -f ~/.local/bin/n3-ai-paste.sh ~/.local/bin/n3-prompt-paste.sh \
+rm -f ~/.local/bin/n3-common.sh ~/.local/bin/n3-ai-paste.sh ~/.local/bin/n3-prompt-paste.sh \
       ~/.local/bin/n3-voice.sh ~/.local/bin/n3-screenshot.sh \
       ~/.local/bin/n3-alttab.sh ~/.local/bin/n3-wechat.sh \
       ~/.local/bin/n3-shot-full.sh
@@ -109,6 +109,22 @@ rm -f ~/.config/streamdock-n3/prompt-style*.txt
 1. 先重启 OpenDeck：托盘图标右键 → Quit → 重新打开。
 2. 检查安装时显示的序列号目录，是否和 `~/.config/opendeck/profiles/` 下实际的目录名一致。首次连接设备后目录名 = 设备序列号（形如 `n3-XXXXXXXXXXXX`），如果和你安装时不同，重新运行一次 `bash install.sh`。
 3. 2/3/4 号键出错时会弹中文通知说明原因，照着提示处理。
+
+**2 号键（AI 智能键）怎么用？**
+选中文字后，连续按 2 号键会循环切换 4 种模式：
+
+| 第几次按 | 模式 | 效果 |
+|:---:|:---:|---|
+| 第 1 次 | 📊 分析 | AI 自动识别内容类型：文章提炼要点、代码解释逻辑、报错诊断原因、英文翻译成中文等 |
+| 第 2 次 | 🌐 翻译 | 翻译成中文（已经是中文就翻译成英文） |
+| 第 3 次 | 💡 简化 | 用大白话重写，让小学生也能听懂 |
+| 第 4 次 | ✅ 待办 | 提取行动项/待办清单 |
+| 第 5 次 | 回到分析 | 循环继续… |
+
+> 3 秒内没有按键会自动重置回「分析」模式，每次选中新文字都从分析开始。
+
+**在终端里使用 2/3 号键要注意什么？**
+终端里选中文字后，AI 处理结果不会自动粘贴（因为终端无法可靠替换原文），而是弹出通知显示结果。结果同时已复制到剪贴板，你可以手动按 `Ctrl+Shift+V` 粘贴。
 
 **DeepSeek API key 在哪填？**
 编辑 `~/.config/streamdock-n3/service.env`，把 `N3_AI_DECK_API_KEY=` 后面替换成你自己的 key（在 https://platform.deepseek.com/ 申请）。填完保存即可，不用重新安装。

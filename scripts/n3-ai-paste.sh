@@ -1,98 +1,141 @@
 #!/usr/bin/env bash
-# OpenDeck key "AI总结": grab the current selection, summarize it into one
-# Chinese sentence via DeepSeek, then paste the result back into the focused
-# window.
+# OpenDeck key "AI 智能键": multi-mode AI interaction that cycles through
+# different operations with each press.
 #
-# Flow:
-#   1. back up the clipboard, then Ctrl+C to grab the current selection
-#   2. if the grabbed text is empty -> restore the backup, notify, exit
-#   3. call DeepSeek (deepseek-v4-flash) to summarize into one Chinese sentence
-#   4. put the result on the clipboard (piped via stdin to avoid escaping bugs)
-#   5. paste it back with Ctrl+V
-#   6. any failure -> notify-send the reason, never paste garbage
+# Mode cycle (press LCD 2 repeatedly):
+#   1st press -> ANALYZE: smart analysis (code->explain, error->diagnose, etc.)
+#   2nd press -> TRANSLATE: translate to Chinese (or English if already Chinese)
+#   3rd press -> SIMPLIFY: rewrite in plain language anyone can understand
+#   4th press -> EXTRACT: extract action items / to-do list
+#   5th press -> back to ANALYZE (cycle repeats)
 #
-# Safety switch: CLIPBOARD_ONLY=1 skips steps 1 and 5 (no Ctrl+C / Ctrl+V),
-# so the script can be tested safely without touching the keyboard.
+# State is tracked in a temp file; resets to ANALYZE after 3 seconds of
+# inactivity, so each fresh selection starts from ANALYZE.
+#
+# Safety switch: CLIPBOARD_ONLY=1 skips Ctrl+C / Ctrl+V.
 set -euo pipefail
 
-API_BASE="${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
-MODEL="${DEEPSEEK_MODEL:-deepseek-v4-flash}"
-ENV_FILE="$HOME/.config/streamdock-n3/service.env"
+N3_APP_NAME="OpenDeck"
+N3_LABEL="AI"
 
-# Load the API key at runtime; never echo it.
-if [ -f "$ENV_FILE" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$ENV_FILE"
-    set +a
-fi
+# shellcheck source=n3-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/n3-common.sh"
 
-if [ -z "${N3_AI_DECK_API_KEY:-}" ]; then
-    notify-send -a "OpenDeck" -i dialog-error "AI 总结" "缺少 N3_AI_DECK_API_KEY" || true
-    exit 1
-fi
+# ---------- mode state management ----------
 
-# Step 1: back up the clipboard and grab the current selection.
-BACKUP=""
-if [ "${CLIPBOARD_ONLY:-0}" != "1" ]; then
-    BACKUP="$(xclip -selection clipboard -o 2>/dev/null || true)"
-    xdotool key ctrl+c
-    sleep 0.3
-fi
+STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/n3-ai-mode"
+MODES=("analyze" "translate" "simplify" "extract")
+STALE_SECONDS=3
 
-# Step 3: read the clipboard.
-TEXT="$(xclip -selection clipboard -o 2>/dev/null || true)"
-TEXT="$(printf '%s' "$TEXT" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+# Read current mode, advancing the cycle. Reset if stale.
+get_and_advance_mode() {
+    local current="analyze"
+    local idx=0
 
-if [ -z "$TEXT" ]; then
-    if [ -n "$BACKUP" ]; then
-        printf '%s' "$BACKUP" | xclip -selection clipboard -i
+    if [ -f "$STATE_FILE" ]; then
+        # Check if state is stale (older than STALE_SECONDS)
+        local file_age
+        file_age=$(( $(date +%s) - $(stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0) ))
+        if [ "$file_age" -lt "$STALE_SECONDS" ]; then
+            current="$(cat "$STATE_FILE")"
+            # Find index and advance
+            for i in "${!MODES[@]}"; do
+                if [ "${MODES[$i]}" = "$current" ]; then
+                    idx=$(( (i + 1) % ${#MODES[@]} ))
+                    break
+                fi
+            done
+        fi
     fi
-    notify-send -a "OpenDeck" -i dialog-information "AI 总结" "没有选中文字" || true
+
+    current="${MODES[$idx]}"
+    # Save next mode for next press
+    echo "${MODES[$(( (idx + 1) % ${#MODES[@]} ))]}" > "$STATE_FILE"
+    echo "$current"
+}
+
+# ---------- prompts for each mode ----------
+
+get_prompt() {
+    local mode="$1"
+    case "$mode" in
+        analyze)
+            cat <<'PROMPT'
+你是一位智能助手。请分析下面这段文字，根据内容类型给出最合适的回复：
+- 如果是文章/新闻：提炼 2~3 个要点，最后给一句话结论
+- 如果是代码：用中文解释这段代码做什么，指出关键逻辑
+- 如果是报错信息：诊断原因，给出解决方案
+- 如果是数据/表格：分析趋势、异常值或关键信息
+- 如果是英文：翻译成中文，并简要说明语境
+- 如果是对话/聊天记录：提取关键信息和待办事项
+- 如果是其他内容：给出简洁的理解和分析
+
+要求：用中文回答，控制在 200 字以内，直接输出分析结果。
+PROMPT
+            ;;
+        translate)
+            cat <<'PROMPT'
+你是专业翻译。请把下面的文字翻译成中文。如果已经是中文，则翻译成英文。
+要求：翻译准确自然，保留专业术语，直接输出翻译结果。
+PROMPT
+            ;;
+        simplify)
+            cat <<'PROMPT'
+你是一位善于用大白话解释复杂概念的老师。请把下面的文字用最简单、最通俗的语言重新表达，让小学生也能听懂。
+要求：用日常用语，避免专业术语，可以用比喻，控制在 150 字以内，直接输出简化后的内容。
+PROMPT
+            ;;
+        extract)
+            cat <<'PROMPT'
+你是一位效率专家。请从下面的文字中提取出所有需要执行的行动项/待办事项。
+要求：
+- 用清晰的编号列表输出
+- 每条待办用动词开头（如"完成..."、"检查..."、"联系..."）
+- 如果有截止日期或优先级，标注出来
+- 如果没有明显的行动项，输出"未检测到明确的待办事项"
+直接输出待办清单。
+PROMPT
+            ;;
+    esac
+}
+
+# ---------- mode display names for notification ----------
+
+get_mode_label() {
+    case "$1" in
+        analyze)    echo "📊 分析" ;;
+        translate)  echo "🌐 翻译" ;;
+        simplify)   echo "💡 简化" ;;
+        extract)    echo "✅ 待办" ;;
+        *)          echo "AI" ;;
+    esac
+}
+
+# ---------- main flow ----------
+
+n3_load_env || exit 1
+
+# Determine current mode
+MODE="$(get_and_advance_mode)"
+MODE_LABEL="$(get_mode_label "$MODE")"
+N3_LABEL="$MODE_LABEL"
+
+# Grab selected text
+n3_grab_text
+if ! n3_finalize_text; then
     exit 0
 fi
 
-# Step 4: call DeepSeek. The payload is built with python3 so the text needs
-# no shell escaping.
-PAYLOAD="$(printf '%s' "$TEXT" | python3 -c '
-import json, sys
-text = sys.stdin.read().strip()
-prompt = "把下面的文字总结成一句话，用中文回答：\n\n" + text
-print(json.dumps({
-    "model": sys.argv[1],
-    "messages": [{"role": "user", "content": prompt}],
-    "stream": False,
-}, ensure_ascii=False))
-' "$MODEL")"
+# Show which mode is active
+notify-send -a "$N3_APP_NAME" -i dialog-information "$MODE_LABEL" "处理中…" -t 2000 || true
 
-RESPONSE="$(curl -sS --max-time 60 "$API_BASE/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $N3_AI_DECK_API_KEY" \
-    --data "$PAYLOAD")"
-
-if ! RESULT="$(printf '%s' "$RESPONSE" | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    content = data["choices"][0]["message"]["content"].strip()
-except Exception:
-    sys.exit(1)
-print(content)
-')"; then
-    notify-send -a "OpenDeck" -i dialog-error "AI 总结" "DeepSeek 调用失败：$RESPONSE" || true
+# Get the prompt for current mode and call API
+PROMPT="$(get_prompt "$MODE")"
+if ! n3_call_api "$PROMPT"; then
+    notify-send -a "$N3_APP_NAME" -i dialog-error "$MODE_LABEL" "DeepSeek 调用失败" || true
     exit 1
 fi
 
-if [ -z "$RESULT" ]; then
-    notify-send -a "OpenDeck" -i dialog-error "AI 总结" "DeepSeek 返回为空" || true
-    exit 1
-fi
-
-# Step 5: put the result on the clipboard (stdin pipe to avoid escaping bugs).
+# Put result on clipboard and paste back
 printf '%s' "$RESULT" | xclip -selection clipboard -i
-
-# Step 6: paste it back into the focused window.
-if [ "${CLIPBOARD_ONLY:-0}" != "1" ]; then
-    sleep 0.3
-    xdotool key ctrl+v
-fi
+n3_paste_back

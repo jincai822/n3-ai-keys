@@ -17,7 +17,7 @@ echo "===== N3 AI 快捷键包 安装开始 ====="
 echo ""
 echo "==> [1/7] 检查系统依赖..."
 MISSING=""
-for cmd in xdotool xclip maim notify-send; do
+for cmd in xdotool xclip maim notify-send python3 curl; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING="$MISSING $cmd"
     fi
@@ -27,7 +27,7 @@ if [ -n "$MISSING" ]; then
     echo "错误: 缺少以下依赖:$MISSING"
     echo "请先复制下面这行到终端运行，装完再重新运行本脚本:"
     echo ""
-    echo "  sudo apt install xdotool xclip maim libnotify-bin"
+    echo "  sudo apt install xdotool xclip maim libnotify-bin python3 curl"
     echo ""
     exit 1
 fi
@@ -127,7 +127,7 @@ echo "==> [7/7] 检查可选依赖..."
 ENV_FILE="$HOME/.config/streamdock-n3/service.env"
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" <<'EOF'
-# 2 号键（AI 总结）和 3 号键（提示词优化）需要 DeepSeek API key。
+# 2 号键（AI 智能键，4 模式循环）和 3 号键（提示词优化）需要 DeepSeek API key。
 # 申请地址: https://platform.deepseek.com/
 # 把下面等号后面换成你的 key 并保存即可，无需重新安装。
 N3_AI_DECK_API_KEY=在这里填你的DeepSeek密钥
@@ -135,7 +135,7 @@ EOF
     chmod 600 "$ENV_FILE"
     echo "    已创建 $ENV_FILE（模板）。"
     echo "    重要: 请编辑该文件，把 N3_AI_DECK_API_KEY= 后面替换成你自己的 DeepSeek API key。"
-    echo "    2 号（AI 总结）和 3 号（提示词优化）键必须填好 key 才能使用。"
+    echo "    2 号（AI 智能键）和 3 号（提示词优化）键必须填好 key 才能使用。"
 else
     echo "    已存在 $ENV_FILE，跳过创建。请自行确认其中已填好 N3_AI_DECK_API_KEY。"
 fi
