@@ -103,6 +103,24 @@ rm -f ~/.config/streamdock-n3/prompt-style*.txt
 
 `~/.config/streamdock-n3/service.env`（含你的 API key）建议删除：`rm -f ~/.config/streamdock-n3/service.env`。最后重启 OpenDeck 即可完全恢复原状。
 
+## 电脑重置后一键恢复
+
+如果电脑重装系统或重置，运行一键恢复脚本：
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/jincai822/n3-ai-keys/main/restore.sh)
+```
+
+或者先克隆仓库再运行：
+
+```bash
+git clone https://github.com/jincai822/n3-ai-keys.git
+cd n3-ai-keys
+bash restore.sh
+```
+
+恢复脚本会自动：安装依赖、配置 udev 规则、克隆仓库、运行安装脚本、提示配置 API key。
+
 ## 常见问题
 
 **按键没反应？**
