@@ -123,6 +123,14 @@ bash restore.sh
 
 ## 常见问题
 
+**设备不亮 / 按键没反应？先跑一键自检**
+
+```bash
+bash ~/.local/bin/n3-doctor.sh
+```
+
+它会逐层检查 USB 识别、权限规则、设备访问、OpenDeck 进程和插件连接，并用中文告诉你哪里出了问题、怎么处理。日常预防口诀：先插设备再开机；不亮就拔插 USB 线；还不行就重启 OpenDeck。
+
 **按键没反应？**
 1. 先重启 OpenDeck：托盘图标右键 → Quit → 重新打开。
 2. 检查安装时显示的序列号目录，是否和 `~/.config/opendeck/profiles/` 下实际的目录名一致。首次连接设备后目录名 = 设备序列号（形如 `n3-XXXXXXXXXXXX`），如果和你安装时不同，重新运行一次 `bash install.sh`。
