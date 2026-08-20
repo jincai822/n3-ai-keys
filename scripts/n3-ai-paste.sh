@@ -1,141 +1,215 @@
 #!/usr/bin/env bash
-# OpenDeck key "AI 智能键": multi-mode AI interaction that cycles through
-# different operations with each press.
+# OpenDeck key 2 "认知发芽助手": grab the current selection, send it to
+# DeepSeek (deepseek-v4-flash) with the prompt from
+# ~/.config/streamdock-n3/key2-prompt.txt, then append the result to today's
+# inbox file under ~/认知种子/.
 #
-# Mode cycle (press LCD 2 repeatedly):
-#   1st press -> ANALYZE: smart analysis (code->explain, error->diagnose, etc.)
-#   2nd press -> TRANSLATE: translate to Chinese (or English if already Chinese)
-#   3rd press -> SIMPLIFY: rewrite in plain language anyone can understand
-#   4th press -> EXTRACT: extract action items / to-do list
-#   5th press -> back to ANALYZE (cycle repeats)
+# Flow:
+#   1. back up the clipboard, then Ctrl+C and poll until the clipboard
+#      actually changes (never analyse stale contents)
+#   2. if nothing new was grabbed -> notify, exit
+#   3. call DeepSeek with the configurable prompt
+#   4. show the result in a zenity review dialog; only 保存 continues,
+#      丢弃 discards it without writing anything
+#   5. append original text + result to ~/认知种子/认知种子-YYYY-MM-DD.md,
+#      and if section 10 routes it to 知识卡片/项目种子 also save a
+#      standalone copy under ~/认知种子/已发芽/
+#   6. any failure -> notify-send the reason, never paste garbage
 #
-# State is tracked in a temp file; resets to ANALYZE after 3 seconds of
-# inactivity, so each fresh selection starts from ANALYZE.
-#
-# Safety switch: CLIPBOARD_ONLY=1 skips Ctrl+C / Ctrl+V.
+# Safety switch: CLIPBOARD_ONLY=1 skips steps 1 and 4 (no Ctrl+C, no review
+# dialog), so the script can be tested safely using the existing clipboard
+# contents. N3_FORCE_CONFIRM=1 re-enables the review dialog in test mode.
 set -euo pipefail
 
-N3_APP_NAME="OpenDeck"
-N3_LABEL="AI"
+# Immediate press feedback: the analysis takes ~20s, so confirm the keypress
+# right away instead of staying silent.
+notify-send -a "OpenDeck" -i dialog-information "认知发芽" "已收到按键，正在分析…约 20 秒后弹出审阅窗" -t 8000 || true
 
-# shellcheck source=n3-common.sh
-source "$(dirname "${BASH_SOURCE[0]}")/n3-common.sh"
+API_BASE="${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+MODEL="${DEEPSEEK_MODEL:-deepseek-v4-flash}"
+ENV_FILE="$HOME/.config/streamdock-n3/service.env"
 
-# ---------- mode state management ----------
-
-STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/n3-ai-mode"
-MODES=("analyze" "translate" "simplify" "extract")
-STALE_SECONDS=3
-
-# Read current mode, advancing the cycle. Reset if stale.
-get_and_advance_mode() {
-    local current="analyze"
-    local idx=0
-
-    if [ -f "$STATE_FILE" ]; then
-        # Check if state is stale (older than STALE_SECONDS)
-        local file_age
-        file_age=$(( $(date +%s) - $(stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0) ))
-        if [ "$file_age" -lt "$STALE_SECONDS" ]; then
-            current="$(cat "$STATE_FILE")"
-            # Find index and advance
-            for i in "${!MODES[@]}"; do
-                if [ "${MODES[$i]}" = "$current" ]; then
-                    idx=$(( (i + 1) % ${#MODES[@]} ))
-                    break
-                fi
-            done
-        fi
-    fi
-
-    current="${MODES[$idx]}"
-    # Save next mode for next press
-    echo "${MODES[$(( (idx + 1) % ${#MODES[@]} ))]}" > "$STATE_FILE"
-    echo "$current"
-}
-
-# ---------- prompts for each mode ----------
-
-get_prompt() {
-    local mode="$1"
-    case "$mode" in
-        analyze)
-            cat <<'PROMPT'
-你是一位智能助手。请分析下面这段文字，根据内容类型给出最合适的回复：
-- 如果是文章/新闻：提炼 2~3 个要点，最后给一句话结论
-- 如果是代码：用中文解释这段代码做什么，指出关键逻辑
-- 如果是报错信息：诊断原因，给出解决方案
-- 如果是数据/表格：分析趋势、异常值或关键信息
-- 如果是英文：翻译成中文，并简要说明语境
-- 如果是对话/聊天记录：提取关键信息和待办事项
-- 如果是其他内容：给出简洁的理解和分析
-
-要求：用中文回答，控制在 200 字以内，直接输出分析结果。
-PROMPT
-            ;;
-        translate)
-            cat <<'PROMPT'
-你是专业翻译。请把下面的文字翻译成中文。如果已经是中文，则翻译成英文。
-要求：翻译准确自然，保留专业术语，直接输出翻译结果。
-PROMPT
-            ;;
-        simplify)
-            cat <<'PROMPT'
-你是一位善于用大白话解释复杂概念的老师。请把下面的文字用最简单、最通俗的语言重新表达，让小学生也能听懂。
-要求：用日常用语，避免专业术语，可以用比喻，控制在 150 字以内，直接输出简化后的内容。
-PROMPT
-            ;;
-        extract)
-            cat <<'PROMPT'
-你是一位效率专家。请从下面的文字中提取出所有需要执行的行动项/待办事项。
-要求：
-- 用清晰的编号列表输出
-- 每条待办用动词开头（如"完成..."、"检查..."、"联系..."）
-- 如果有截止日期或优先级，标注出来
-- 如果没有明显的行动项，输出"未检测到明确的待办事项"
-直接输出待办清单。
-PROMPT
-            ;;
-    esac
-}
-
-# ---------- mode display names for notification ----------
-
-get_mode_label() {
-    case "$1" in
-        analyze)    echo "📊 分析" ;;
-        translate)  echo "🌐 翻译" ;;
-        simplify)   echo "💡 简化" ;;
-        extract)    echo "✅ 待办" ;;
-        *)          echo "AI" ;;
-    esac
-}
-
-# ---------- main flow ----------
-
-n3_load_env || exit 1
-
-# Determine current mode
-MODE="$(get_and_advance_mode)"
-MODE_LABEL="$(get_mode_label "$MODE")"
-N3_LABEL="$MODE_LABEL"
-
-# Grab selected text
-n3_grab_text
-if ! n3_finalize_text; then
-    exit 0
+# Load the API key at runtime; never echo it.
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$ENV_FILE"
+    set +a
 fi
 
-# Show which mode is active
-notify-send -a "$N3_APP_NAME" -i dialog-information "$MODE_LABEL" "处理中…" -t 2000 || true
-
-# Get the prompt for current mode and call API
-PROMPT="$(get_prompt "$MODE")"
-if ! n3_call_api "$PROMPT"; then
-    notify-send -a "$N3_APP_NAME" -i dialog-error "$MODE_LABEL" "DeepSeek 调用失败" || true
+if [ -z "${N3_AI_DECK_API_KEY:-}" ]; then
+    notify-send -a "OpenDeck" -i dialog-error "认知发芽" "缺少 N3_AI_DECK_API_KEY" || true
     exit 1
 fi
 
-# Put result on clipboard and paste back
+# Step 1: back up the clipboard and grab the current selection. Then poll
+# until the clipboard actually changes — browsers can take a moment to serve
+# the copy, and analysing stale clipboard contents is worse than aborting.
+# Always request the UTF8_STRING target first: Chrome puts HTML on the
+# clipboard, and the default target would hand us raw markup instead of text.
+LOG="$HOME/.cache/n3-sprout.log"
+echo "$(date '+%F %T') triggered mode=${CLIPBOARD_ONLY:-0}" >> "$LOG"
+
+read_clip() {
+    xclip -selection clipboard -t UTF8_STRING -o 2>/dev/null || xclip -selection clipboard -o 2>/dev/null || true
+}
+
+BACKUP=""
+if [ "${CLIPBOARD_ONLY:-0}" != "1" ]; then
+    BACKUP="$(read_clip)"
+    xdotool key ctrl+c
+    CHANGED=0
+    for _ in $(seq 1 15); do
+        sleep 0.1
+        NEW="$(read_clip)"
+        if [ -n "$NEW" ] && [ "$NEW" != "$BACKUP" ]; then
+            CHANGED=1
+            break
+        fi
+    done
+    if [ "$CHANGED" != "1" ]; then
+        echo "$(date '+%F %T') no new selection, abort" >> "$LOG"
+        notify-send -a "OpenDeck" -i dialog-information "认知发芽" "没有检测到新选中的文字，请先选中文字再按" || true
+        exit 0
+    fi
+fi
+
+# Step 3: read the clipboard.
+TEXT="$(read_clip)"
+TEXT="$(printf '%s' "$TEXT" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+if [ -z "$TEXT" ]; then
+    if [ -n "$BACKUP" ]; then
+        printf '%s' "$BACKUP" | xclip -selection clipboard -i
+    fi
+    notify-send -a "OpenDeck" -i dialog-information "认知发芽" "没有选中文字" || true
+    exit 0
+fi
+
+# Step 4: call DeepSeek. The payload is built with python3 so the text needs
+# no shell escaping. The prompt prefix is configurable: edit
+# ~/.config/streamdock-n3/key2-prompt.txt to change what key 2 does.
+PROMPT_FILE="$HOME/.config/streamdock-n3/key2-prompt.txt"
+if [ -f "$PROMPT_FILE" ]; then
+    PROMPT="$(cat "$PROMPT_FILE")"
+else
+    PROMPT="把下面的文字总结成一句话，用中文回答："
+fi
+
+PAYLOAD="$(printf '%s' "$TEXT" | python3 -c '
+import json, sys
+text = sys.stdin.read().strip()
+prompt = sys.argv[2] + "\n\n" + text
+print(json.dumps({
+    "model": sys.argv[1],
+    "messages": [{"role": "user", "content": prompt}],
+    "stream": False,
+}, ensure_ascii=False))
+' "$MODEL" "$PROMPT")"
+
+RESPONSE="$(curl -sS --max-time 60 "$API_BASE/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $N3_AI_DECK_API_KEY" \
+    --data "$PAYLOAD")"
+
+if ! RESULT="$(printf '%s' "$RESPONSE" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    content = data["choices"][0]["message"]["content"].strip()
+except Exception:
+    sys.exit(1)
+print(content)
+')"; then
+    notify-send -a "OpenDeck" -i dialog-error "认知发芽" "DeepSeek 调用失败：$RESPONSE" || true
+    exit 1
+fi
+
+if [ -z "$RESULT" ]; then
+    notify-send -a "OpenDeck" -i dialog-error "认知发芽" "DeepSeek 返回为空" || true
+    exit 1
+fi
+
+echo "$(date '+%F %T') got result, awaiting review" >> "$LOG"
+
+# Step 5: human review gate — show the result in a zenity dialog and only
+# save it if the user clicks 保存; 丢弃 discards it and nothing is written.
+# Skipped in CLIPBOARD_ONLY test mode unless N3_FORCE_CONFIRM=1 (used for
+# end-to-end testing of the dialog itself).
+if [ "${CLIPBOARD_ONLY:-0}" != "1" ] || [ "${N3_FORCE_CONFIRM:-0}" = "1" ]; then
+    REVIEW_TMP="$(mktemp "$HOME/.cache/n3-review-XXXXXX.md")"
+    {
+        printf '> 原始记录：\n'
+        printf '%s\n' "$TEXT" | sed 's/^/> /'
+        printf '\n%s\n' "$RESULT"
+    } > "$REVIEW_TMP"
+    if ! DISPLAY="${DISPLAY:-:1}" zenity --text-info \
+        --title="认知发芽 · 审阅（点保存才会入库）" \
+        --filename="$REVIEW_TMP" --width=900 --height=700 \
+        --ok-label="保存" --cancel-label="丢弃" 2>/dev/null; then
+        rm -f "$REVIEW_TMP"
+        notify-send -a "OpenDeck" -i dialog-information "认知发芽" "已丢弃，未保存" || true
+        exit 0
+    fi
+    rm -f "$REVIEW_TMP"
+fi
+
+# Step 6: append the approved result (plus the original text) to today's inbox
+# file under ~/认知种子/. Also keep a copy on the clipboard for manual pasting.
+OUT_DIR="$HOME/认知种子"
+OUT_FILE="$OUT_DIR/认知种子-$(date +%F).md"
+mkdir -p "$OUT_DIR"
+
+{
+    printf '## %s\n\n' "$(date +%H:%M)"
+    printf '> 原始记录：\n'
+    printf '%s\n' "$TEXT" | sed 's/^/> /'
+    printf '\n%s\n\n---\n\n' "$RESULT"
+} >> "$OUT_FILE"
+
+# Routing layer: if section 10 routes this seed to 知识卡片 or 项目种子, also
+# save a standalone copy under 认知种子/已发芽/ named after the AI-generated
+# title, so valuable seeds get their own identity for later filing. Everything
+# still lands in the daily inbox file above.
+SPROUT_TITLE="$(printf '%s' "$RESULT" | python3 -c '
+import re, sys
+text = sys.stdin.read()
+m = re.search(r"# 10\. 系统路由\s*\n(.*?)(?=\n# |\Z)", text, re.S)
+route = m.group(1) if m else ""
+# ignore negated mentions like "不进入知识卡片"
+hit = False
+for line in route.splitlines():
+    for kw in ("知识卡片", "项目种子"):
+        i = line.find(kw)
+        if i >= 0 and "不" not in line[max(0, i-4):i]:
+            hit = True
+if not hit:
+    sys.exit(0)
+t = re.search(r"标题[：:]\s*\*?\*?(.+?)\*?\*?\s*$", text, re.M)
+title = t.group(1).strip() if t else ""
+title = re.sub(r"[\\/:*?\"<>|]", "", title)[:50].strip()
+print(title)
+')"
+
+SPROUT_FILE=""
+if [ -n "$SPROUT_TITLE" ]; then
+    SPROUT_DIR="$OUT_DIR/已发芽"
+    mkdir -p "$SPROUT_DIR"
+    SPROUT_FILE="$SPROUT_DIR/$(date +%F)-$SPROUT_TITLE.md"
+    if [ -e "$SPROUT_FILE" ]; then
+        SPROUT_FILE="$SPROUT_DIR/$(date +%F-%H%M)-$SPROUT_TITLE.md"
+    fi
+    {
+        printf '> 原始记录（%s）：\n' "$(date '+%F %H:%M')"
+        printf '%s\n' "$TEXT" | sed 's/^/> /'
+        printf '\n%s\n' "$RESULT"
+    } > "$SPROUT_FILE"
+fi
+
 printf '%s' "$RESULT" | xclip -selection clipboard -i
-n3_paste_back
+if [ -n "$SPROUT_FILE" ]; then
+    notify-send -a "OpenDeck" -i dialog-information "认知发芽" "已存入收集箱，并发芽为：$SPROUT_TITLE" || true
+else
+    notify-send -a "OpenDeck" -i dialog-information "认知发芽" "已存入今日收集箱" || true
+fi
+

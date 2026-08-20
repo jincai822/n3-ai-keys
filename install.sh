@@ -96,6 +96,13 @@ install -m 644 "$PKG_DIR"/config/prompt-style.txt \
     "$PKG_DIR"/config/prompt-style-详细版.txt \
     "$HOME/.config/streamdock-n3/"
 echo "    已安装 3 个风格文件（当前生效的是 prompt-style.txt）。"
+KEY2_DEST="$HOME/.config/streamdock-n3/key2-prompt.txt"
+if [ -f "$KEY2_DEST" ]; then
+    cp "$KEY2_DEST" "$KEY2_DEST.bak"
+    echo "    检测到已有的 key2-prompt.txt，已备份为 key2-prompt.txt.bak"
+fi
+install -m 644 "$PKG_DIR"/config/key2-prompt.txt "$HOME/.config/streamdock-n3/"
+echo "    已安装 2 号键「认知发芽助手」提示词（key2-prompt.txt，可自由编辑）。"
 
 # ---------- 6. 写入 OpenDeck 键位配置和图标 ----------
 echo ""
